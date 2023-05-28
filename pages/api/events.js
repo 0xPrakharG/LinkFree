@@ -1,42 +1,41 @@
-import fs from "fs";
-import path from "path";
+import logger from "@config/logger";
+import Profile from "@models/Profile";
 
 export default async function handler(req, res) {
-  const directoryPath = path.join(process.cwd(), "data");
-  const userFolders = fs
-    .readdirSync(directoryPath)
-    .filter((item) => !item.includes("json"));
-  const events = userFolders.flatMap((folder) => {
-    const eventsPath = path.join(directoryPath, folder, "events");
-    let eventFiles = [];
-    try {
-      eventFiles = fs.readdirSync(eventsPath);
-    } catch (e) {
-      console.log(`ERROR no events in "${eventsPath}"`);
-      return [];
-    }
-    const eventFilesContent = eventFiles.flatMap((file) => {
-      try {
-        return {
-          ...JSON.parse(fs.readFileSync(path.join(eventsPath, file), "utf8")),
-          username: folder,
-        };
-      } catch (e) {
-        console.log(`ERROR loading event "${file}" in "${eventsPath}"`);
-        return [];
-      }
-    });
+  if (req.method != "GET") {
+    return res
+      .status(400)
+      .json({ error: "Invalid request: GET request required" });
+  }
 
-    return eventFilesContent;
-  });
+  const events = await getEvents();
+  return res.status(200).json(events);
+}
 
-  const eventsFiltered = events
-    .reduce(
-      (previousValue, currentValue) => previousValue.concat(currentValue),
-      []
-    )
-    .filter((event) => new Date(event.date.end) > new Date())
-    .sort((a, b) => new Date(a.date.start) - new Date(b.date.start));
+export async function getEvents() {
+  let events = [];
+  try {
+    events = await Profile.aggregate([
+      { $project: { username: 1, events: 1, isEnabled: 1 } },
+      { $match: { "events.date.start": { $gt: new Date() } } },
+      { $match: { isEnabled: true } },
+    ])
+      .unwind("events")
+      .sort({ "events.date.start": 1 })
+      .exec();
 
-  res.status(200).json(eventsFiltered);
+    events = events
+      .map((event) => ({
+        ...event.events,
+        username: event.username,
+        _id: event._id,
+      }))
+      // TODO remove and do with mongo query
+      .filter((event) => new Date(event.date.end) > new Date());
+  } catch (e) {
+    logger.error(e, "Failed to load events");
+    events = [];
+  }
+
+  return JSON.parse(JSON.stringify(events));
 }

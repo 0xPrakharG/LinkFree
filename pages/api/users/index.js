@@ -1,42 +1,31 @@
-import fs from "fs";
-import path from "path";
-
-import connectMongo from "../../../config/mongo";
-import Profile from "../../../models/Profile";
+import connectMongo from "@config/mongo";
+import logger from "@config/logger";
+import { Profile } from "@models/index";
 
 export default async function handler(req, res) {
-  await connectMongo();
-  const directoryPath = path.join(process.cwd(), "data");
-  const files = fs
-    .readdirSync(directoryPath)
-    .filter((item) => item.includes("json"));
+  if (req.method != "GET") {
+    return res
+      .status(400)
+      .json({ error: "Invalid request: GET request required" });
+  }
 
-  const users = files.flatMap((file) => {
-    const filePath = path.join(directoryPath, file);
-    try {
-      return {
-        ...JSON.parse(fs.readFileSync(filePath, "utf8")),
-        username: file.split(".")[0],
-      };
-    } catch (e) {
-      console.log(`ERROR loading profile "${filePath}"`);
-      return [];
-    }
-  });
-  const getStats = await Profile.find({});
-
-  // merge profiles with their profile views if set to public
-  const profiles = users.map((user) => {
-    const stats = getStats.find((stat) => stat.username === user.username);
-    if (stats && user.displayStatsPublic) {
-      return {
-        ...user,
-        ...stats._doc,
-      };
-    }
-
-    return user;
-  });
+  const profiles = await getUsers();
 
   res.status(200).json(profiles);
+}
+export async function getUsers() {
+  await connectMongo();
+
+  let profiles = [];
+  try {
+    profiles = await Profile.find(
+      { name: { $exists: true }, isEnabled: true },
+      ["username", "name", "bio", "tags", "location"]
+    );
+  } catch (e) {
+    logger.error(e, "failed loading profiles");
+    return profiles;
+  }
+
+  return JSON.parse(JSON.stringify(profiles));
 }
